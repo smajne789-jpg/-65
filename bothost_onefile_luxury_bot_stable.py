@@ -15,9 +15,7 @@ TOKEN = os.getenv("TOKEN", "")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-SPONSORS = [
-    "@telegram"
-]
+SPONSORS = []
 
 # ================== BOT ==================
 bot = Bot(
@@ -78,7 +76,7 @@ menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="👑 Профиль")],
         [KeyboardButton(text="💎 Рефералы"), KeyboardButton(text="🏆 Топ")],
-        [KeyboardButton(text="🎁 Бонус"), KeyboardButton(text="💸 Вывод")],
+        [KeyboardButton(text="💸 Вывод")],
         [KeyboardButton(text="👑 Админка")]
     ],
     resize_keyboard=True
@@ -135,7 +133,7 @@ async def start(message: Message):
             try:
                 await bot.send_message(
                     ref,
-                    f"✨ Вам начислено <b>{reward}₽</b> за реферала"
+                    f"✨ Вам начислено <b>{reward}$</b> за реферала"
                 )
             except:
                 pass
@@ -193,10 +191,10 @@ async def profile(message: Message):
 
 🆔 ID: <code>{message.from_user.id}</code>
 👥 Рефералов: <b>{user[1]}</b>
-💎 Баланс: <b>{user[0]}₽</b>
+💎 Баланс: <b>{user[0]}$</b>
 
-🎁 За реферала: <b>{reward}₽</b>
-💸 Мин вывод: <b>{minimum}₽</b>
+🎁 За реферала: <b>{reward}$</b>
+💸 Мин вывод: <b>{minimum}$</b>
 """
 
     await message.answer(text)
@@ -227,19 +225,7 @@ async def top(message: Message):
     await message.answer(text)
 
 # ================== BONUS ==================
-@dp.message(F.text == "🎁 Бонус")
-async def bonus(message: Message):
-    conn = db()
-    cur = conn.cursor()
 
-    cur.execute(
-        "UPDATE users SET balance = balance + 10 WHERE user_id=?",
-        (message.from_user.id,)
-    )
-
-    conn.commit()
-
-    await message.answer("🎁 Вам начислено 10₽")
 
 # ================== WITHDRAW ==================
 @dp.message(F.text == "💸 Вывод")
@@ -266,7 +252,7 @@ async def withdraw_amount(message: Message, state: FSMContext):
     _, minimum = get_settings()
 
     if amount < minimum:
-        return await message.answer(f"❌ Мин вывод {minimum}₽")
+        return await message.answer(f"❌ Мин вывод {minimum}$")
 
     if balance < amount:
         return await message.answer("❌ Недостаточно средств")
@@ -295,7 +281,7 @@ async def withdraw_amount(message: Message, state: FSMContext):
 
     await bot.send_message(
         ADMIN_ID,
-        f"💸 Новая заявка\n\n👤 @{message.from_user.username}\n💰 {amount}₽",
+        f"💸 Новая заявка\n\n👤 @{message.from_user.username}\n💰 {amount}$",
         reply_markup=kb
     )
 
@@ -330,7 +316,7 @@ async def accept(call: CallbackQuery):
 
     await bot.send_message(
         user_id,
-        f"✅ Выплата подтверждена\n\n💸 {amount}₽"
+        f"✅ Выплата подтверждена\n\n💸 {amount}$"
     )
 
     await call.message.edit_text("✅ Выплата подтверждена")
@@ -406,11 +392,15 @@ async def admin(message: Message):
 
     await message.answer(
         f"""
-👑 <b>ADMIN PANEL</b>
+👑 <b>LUXURY ADMIN PANEL</b>
+
+⚙ Все настройки управляются через админку
 
 👥 Пользователей: <b>{users}</b>
 💸 Выводов: <b>{withdraws}</b>
 📢 Спонсоров: <b>{len(SPONSORS)}</b>
+
+⚙ Спонсоров можно добавлять вручную в коде
         """,
         reply_markup=kb
     )
