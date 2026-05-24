@@ -8,9 +8,11 @@ from aiogram.filters import CommandStart
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 
-TOKEN = "TOKEN"
-ADMIN_ID = 123456789
-BOT_USERNAME = "YourBot"
+import os
+
+TOKEN = os.getenv("TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
+BOT_USERNAME = os.getenv("BOT_USERNAME")
 
 bot = Bot(
     token=TOKEN,
