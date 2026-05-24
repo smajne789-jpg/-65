@@ -1,126 +1,150 @@
 import asyncio
-import os
 import sqlite3
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.filters import CommandStart
-from aiogram.types import *
-from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.storage.memory import MemoryStorage
 
-# ================== CONFIG ==================
-TOKEN = os.getenv("TOKEN", "")
-BOT_USERNAME = os.getenv("BOT_USERNAME", "")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
+TOKEN = "TOKEN"
+ADMIN_ID = 123456789
+BOT_USERNAME = "YourBot"
 
-SPONSORS = []
-
-# 👑 STABLE SETTINGS
-if not TOKEN:
-    print('ERROR: TOKEN NOT FOUND')
-    exit()
-
-# ================== BOT ==================
 bot = Bot(
     token=TOKEN,
-    default=DefaultBotProperties(parse_mode=ParseMode.HTML
+    default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 
-# 👑 PREMIUM EMOJI SAFE MODE
-# Premium emoji используются только в сообщениях
-# НЕ используются в кнопках чтобы избежать крашей
+dp = Dispatcher()
 
-bot.default.parse_mode = ParseMode.HTML)
+# ================= DATABASE =================
+
+conn = sqlite3.connect("database.db")
+cursor = conn.cursor()
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER PRIMARY KEY,
+    balance REAL DEFAULT 0,
+    referrals INTEGER DEFAULT 0,
+    invited_by INTEGER,
+    username TEXT
 )
+''')
 
-dp = Dispatcher(storage=MemoryStorage())
-
-# ================== DATABASE ==================
-def db():
-    return sqlite3.connect("database.db")
-
-conn = db()
-cur = conn.cursor()
-
-cur.execute("""
-CREATE TABLE IF NOT EXISTS users(
-user_id INTEGER PRIMARY KEY,
-referrer INTEGER,
-balance REAL DEFAULT 0,
-refs INTEGER DEFAULT 0
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS settings (
+    ref_reward REAL DEFAULT 0.5,
+    min_withdraw REAL DEFAULT 5
 )
-""")
+''')
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS settings(
-reward REAL DEFAULT 5,
-min_withdraw REAL DEFAULT 100
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS promo (
+    code TEXT,
+    reward REAL,
+    uses INTEGER
 )
-""")
+''')
 
-cur.execute("""
-CREATE TABLE IF NOT EXISTS withdraws(
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-user_id INTEGER,
-amount REAL,
-status TEXT
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS promo_used (
+    user_id INTEGER,
+    code TEXT
 )
-""")
+''')
+
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS withdrawals (
+    user_id INTEGER,
+    amount REAL,
+    status TEXT
+)
+''')
 
 conn.commit()
 
-cur.execute("SELECT * FROM settings")
-if not cur.fetchone():
-    cur.execute("INSERT INTO settings VALUES(5,100)")
-    conn.commit()
+# ================= STATES =================
 
-# ================== STATES ==================
-class Withdraw(StatesGroup):
+class WithdrawState(StatesGroup):
     amount = State()
 
-class Reject(StatesGroup):
+class PromoState(StatesGroup):
+    code = State()
+
+class RejectState(StatesGroup):
     reason = State()
 
-# ================== MENU ==================
-menu = ReplyKeyboardMarkup(
-    keyboard=[
-        [KeyboardButton(text="👑 Профиль")],
-        [KeyboardButton(text="💎 Рефералы"), KeyboardButton(text="🏆 Топ")],
-        [KeyboardButton(text="💸 Вывод")],
-        [KeyboardButton(text="👑 Админка")]
-    ],
-    resize_keyboard=True
+# ================= FUNCTIONS =================
+
+def get_settings():
+    row = cursor.execute("SELECT ref_reward, min_withdraw FROM settings").fetchone()
+
+    if not row:
+        cursor.execute("INSERT INTO settings VALUES (?, ?)", (0.5, 5))
+        conn.commit()
+        return 0.5, 5
+
+    return row
+
+
+def register_user(user_id, username, ref=None):
+    user = cursor.execute(
+        "SELECT * FROM users WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+    if user:
+        return
+
+    cursor.execute(
+        "INSERT INTO users(user_id, username, invited_by) VALUES(?,?,?)",
+        (user_id, username, ref)
+    )
+
+    if ref and ref != user_id:
+        reward, _ = get_settings()
+
+        cursor.execute(
+            "UPDATE users SET balance = balance + ?, referrals = referrals + 1 WHERE user_id=?",
+            (reward, ref)
+        )
+
+    conn.commit()
+
+
+def get_user(user_id):
+    return cursor.execute(
+        "SELECT * FROM users WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+
+# ================= KEYBOARDS =================
+
+main_kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
+        [InlineKeyboardButton(text="👥 Пригласить", callback_data="ref")],
+        [InlineKeyboardButton(text="💸 Вывод", callback_data="withdraw")],
+        [InlineKeyboardButton(text="🎁 Промокод", callback_data="promo")]
+    ]
 )
 
-# ================== FUNCTIONS ==================
-def get_settings():
-    c = db().cursor()
-    c.execute("SELECT reward, min_withdraw FROM settings")
-    return c.fetchone()
+admin_kb = InlineKeyboardMarkup(
+    inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="stats")],
+        [InlineKeyboardButton(text="💰 Настройки", callback_data="settings")]
+    ]
+)
 
-async def subscribed(user_id):
-    if not SPONSORS:
-        return True
+# ================= START =================
 
-    for sponsor in SPONSORS:
-        try:
-            member = await bot.get_chat_member(sponsor, user_id)
-
-            if member.status in ['left', 'kicked']:
-                return False
-
-        except Exception as e:
-            print(f'SUBSCRIBE ERROR: {e}')
-            return False
-
-    return True
-
-# ================== START ==================
 @dp.message(CommandStart())
 async def start(message: Message):
     args = message.text.split()
+
     ref = None
 
     if len(args) > 1:
@@ -129,305 +153,260 @@ async def start(message: Message):
         except:
             pass
 
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT * FROM users WHERE user_id=?", (message.from_user.id,))
-    user = cur.fetchone()
-
-    if not user:
-        return await message.answer('❌ Пользователь не найден')
-
-    if not user:
-        cur.execute(
-            "INSERT INTO users(user_id, referrer) VALUES(?, ?)",
-            (message.from_user.id, ref)
-        )
-
-        if ref and ref != message.from_user.id:
-            reward, _ = get_settings()
-
-            cur.execute(
-                "UPDATE users SET balance = balance + ?, refs = refs + 1 WHERE user_id=?",
-                (reward, ref)
-            )
-
-            try:
-                try:
-        await bot.send_message(
-            ADMIN_ID,
-            f"💸 Новая заявка\n\n👤 @{message.from_user.username}\n💰 {amount}$",
-            reply_markup=kb
-        )
-    except Exception as e:
-        print(f'ADMIN SEND ERROR: {e}')
-        return await message.answer('❌ Ошибка отправки заявки админу')
-
-    await message.answer(
-        """
-<tg-emoji emoji-id="5359457415116417830">👑</tg-emoji> <b>LUXURY REF SYSTEM</b>
-
-<tg-emoji emoji-id="5431449001532594346">💎</tg-emoji> Приглашай друзей
-<tg-emoji emoji-id="5465665476971471368">💸</tg-emoji> Получай баланс
-<tg-emoji emoji-id="5222103143506736007">🏆</tg-emoji> Выводи деньги
-        """,
-        reply_markup=menu
+    register_user(
+        message.from_user.id,
+        message.from_user.username,
+        ref
     )
 
-# ================== SUB CHECK ==================
-@dp.callback_query(F.data == "check_sub")
-async def check_sub(call: CallbackQuery):
-    if not await subscribed(call.from_user.id):
-        return await call.answer("❌ Подпишитесь", show_alert=True)
+    text = """
+✨ <b>Добро пожаловать!</b>
 
-    await call.message.answer("✅ Подписка подтверждена", reply_markup=menu)
+💰 Зарабатывайте на приглашениях
+👥 Приглашайте друзей
+💸 Выводите деньги
+🎁 Используйте промокоды
+    """
 
-# ================== PROFILE ==================
-@dp.message(F.text == "👑 Профиль")
-async def profile(message: Message):
-    conn = db()
-    cur = conn.cursor()
+    await message.answer(text, reply_markup=main_kb)
 
-    cur.execute(
-        "SELECT balance, refs FROM users WHERE user_id=?",
-        (message.from_user.id,)
-    )
+# ================= PROFILE =================
 
-    user = cur.fetchone()
+@dp.callback_query(F.data == "profile")
+async def profile(callback: CallbackQuery):
+    user = get_user(callback.from_user.id)
 
-    if not user:
-        return await message.answer('❌ Пользователь не найден')
     reward, minimum = get_settings()
 
     text = f"""
-<tg-emoji emoji-id="5359457415116417830">👑</tg-emoji> <b>ПРОФИЛЬ</b>
+👤 <b>Ваш профиль</b>
 
-🆔 ID: <code>{message.from_user.id}</code>
-👥 Рефералов: <b>{user[1]}</b>
-<tg-emoji emoji-id="5431449001532594346">💎</tg-emoji> Баланс: <b>{user[0]}$</b>
+🆔 ID: <code>{user[0]}</code>
+💰 Баланс: <b>${user[1]:.2f}</b>
+👥 Рефералов: <b>{user[2]}</b>
 
-<tg-emoji emoji-id="5282843764451195532">🎁</tg-emoji> За реферала: <b>{reward}$</b>
-<tg-emoji emoji-id="5465665476971471368">💸</tg-emoji> Мин вывод: <b>{minimum}$</b>
-"""
+🎁 За реферала: <b>${reward}</b>
+💸 Минимальный вывод: <b>${minimum}</b>
+    """
 
-    await message.answer(text)
+    await callback.message.edit_text(text, reply_markup=main_kb)
 
-# ================== REFS ==================
-@dp.message(F.text == "💎 Рефералы")
-async def refs(message: Message):
-    link = f"https://t.me/{BOT_USERNAME}?start={message.from_user.id}"
+# ================= REF =================
 
-    await message.answer(
-        f"👥 Ваша ссылка:\n\n<code>{link}</code>"
+@dp.callback_query(F.data == "ref")
+async def ref(callback: CallbackQuery):
+    link = f"https://t.me/{BOT_USERNAME}?start={callback.from_user.id}"
+
+    text = f"""
+👥 <b>Ваша реферальная ссылка</b>
+
+<code>{link}</code>
+
+💰 Приглашайте друзей и зарабатывайте
+    """
+
+    await callback.message.edit_text(text, reply_markup=main_kb)
+
+# ================= WITHDRAW =================
+
+@dp.callback_query(F.data == "withdraw")
+async def withdraw(callback: CallbackQuery, state: FSMContext):
+    _, minimum = get_settings()
+
+    await callback.message.answer(
+        f"💸 Введите сумму вывода\nМинимум: ${minimum}"
     )
 
-# ================== TOP ==================
-@dp.message(F.text == "🏆 Топ")
-async def top(message: Message):
-    conn = db()
-    cur = conn.cursor()
+    await state.set_state(WithdrawState.amount)
 
-    cur.execute("SELECT user_id, refs FROM users ORDER BY refs DESC LIMIT 10")
-    users = cur.fetchall()
-
-    text = "🏆 <b>ТОП</b>\n\n"
-
-    for i, u in enumerate(users, start=1):
-        text += f"{i}. <code>{u[0]}</code> — {u[1]}\n"
-
-    await message.answer(text)
-
-# ================== BONUS ==================
-
-
-# ================== WITHDRAW ==================
-@dp.message(F.text == "💸 Вывод")
-async def withdraw(message: Message, state: FSMContext):
-    await state.set_state(Withdraw.amount)
-    await message.answer("💸 Введите сумму")
-
-@dp.message(Withdraw.amount)
+@dp.message(WithdrawState.amount)
 async def withdraw_amount(message: Message, state: FSMContext):
     try:
         amount = float(message.text)
     except:
         return await message.answer("❌ Введите число")
 
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT balance FROM users WHERE user_id=?",
-        (message.from_user.id,)
-    )
-
-    data = cur.fetchone()
-
-    if not data:
-        return await message.answer('❌ Профиль не найден')
-
-    balance = data[0]
+    user = get_user(message.from_user.id)
     _, minimum = get_settings()
 
     if amount < minimum:
-        return await message.answer(f"❌ Мин вывод {minimum}$")
+        return await message.answer("❌ Сумма меньше минимальной")
 
-    if balance < amount:
+    if amount > user[1]:
         return await message.answer("❌ Недостаточно средств")
 
-    cur.execute(
+    cursor.execute(
         "UPDATE users SET balance = balance - ? WHERE user_id=?",
         (amount, message.from_user.id)
     )
 
-    cur.execute(
-        "INSERT INTO withdraws(user_id, amount, status) VALUES(?,?,?)",
-        (message.from_user.id, amount, "wait")
+    cursor.execute(
+        "INSERT INTO withdrawals VALUES(?,?,?)",
+        (message.from_user.id, amount, "pending")
     )
 
-    wid = cur.lastrowid
     conn.commit()
 
     kb = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="✅ Подтвердить", callback_data=f"ok_{wid}"),
-                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"no_{wid}")
+                InlineKeyboardButton(
+                    text="✅ Подтвердить",
+                    callback_data=f"accept_{message.from_user.id}_{amount}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Отклонить",
+                    callback_data=f"reject_{message.from_user.id}_{amount}"
+                )
             ]
         ]
     )
 
     await bot.send_message(
         ADMIN_ID,
-        f"💸 Новая заявка\n\n👤 @{message.from_user.username}\n💰 {amount}$",
-        reply_markup=kb
-    )
-
-    await message.answer("✅ Заявка отправлена")
-    await state.clear()
-
-# ================== ACCEPT ==================
-@dp.callback_query(F.data.startswith("ok_"))
-async def accept(call: CallbackQuery):
-    if call.from_user.id != ADMIN_ID:
-        return
-
-    wid = int(call.data.split("_")[1])
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT user_id, amount FROM withdraws WHERE id=?", (wid,))
-    data = cur.fetchone()
-
-    if not data:
-        return
-
-    user_id, amount = data
-
-    cur.execute(
-        "UPDATE withdraws SET status='done' WHERE id=?",
-        (wid,)
-    )
-
-    conn.commit()
-
-    await bot.send_message(
-        user_id,
-        f"✅ Выплата подтверждена\n\n💸 {amount}$"
-    )
-
-    await call.message.edit_text("✅ Выплата подтверждена")
-
-# ================== REJECT ==================
-@dp.callback_query(F.data.startswith("no_"))
-async def reject(call: CallbackQuery, state: FSMContext):
-    if call.from_user.id != ADMIN_ID:
-        return
-
-    wid = int(call.data.split("_")[1])
-
-    await state.update_data(wid=wid)
-    await state.set_state(Reject.reason)
-
-    await call.message.answer("❌ Введите причину отказа")
-
-@dp.message(Reject.reason)
-async def reject_reason(message: Message, state: FSMContext):
-    data = await state.get_data()
-    wid = data['wid']
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute(
-        "SELECT user_id, amount FROM withdraws WHERE id=?",
-        (wid,)
-    )
-
-    user_id, amount = cur.fetchone()
-
-    cur.execute(
-        "UPDATE users SET balance = balance + ? WHERE user_id=?",
-        (amount, user_id)
-    )
-
-    cur.execute(
-        "UPDATE withdraws SET status='reject' WHERE id=?",
-        (wid,)
-    )
-
-    conn.commit()
-
-    await bot.send_message(
-        user_id,
-        f"❌ Заявка отклонена\n\n📄 Причина: {message.text}\n\n💰 Деньги возвращены"
-    )
-
-    await message.answer("✅ Заявка отклонена")
-    await state.clear()
-
-# ================== ADMIN ==================
-@dp.message(F.text == "👑 Админка")
-async def admin(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-
-    conn = db()
-    cur = conn.cursor()
-
-    cur.execute("SELECT COUNT(*) FROM users")
-    users = cur.fetchone()[0]
-
-    cur.execute("SELECT COUNT(*) FROM withdraws")
-    withdraws = cur.fetchone()[0]
-
-    kb = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="📊 Обновить", callback_data="stats")]
-        ]
-    )
-
-    await message.answer(
         f"""
-<tg-emoji emoji-id="5359457415116417830">👑</tg-emoji> <b>LUXURY ADMIN PANEL</b>
+💸 <b>Новая заявка на вывод</b>
 
-⚙ Все настройки управляются через админку
+👤 @{message.from_user.username}
+🆔 <code>{message.from_user.id}</code>
 
-👥 Пользователей: <b>{users}</b>
-💸 Выводов: <b>{withdraws}</b>
-📢 Спонсоров: <b>{len(SPONSORS)}</b>
-
-⚙ Спонсоров можно добавлять вручную в коде
+💰 Сумма: <b>${amount}</b>
         """,
         reply_markup=kb
     )
 
-# ================== RUN ==================
+    await message.answer("✅ Заявка отправлена")
+
+    await state.clear()
+
+# ================= ACCEPT =================
+
+@dp.callback_query(F.data.startswith("accept_"))
+async def accept(callback: CallbackQuery):
+    data = callback.data.split("_")
+
+    user_id = int(data[1])
+    amount = float(data[2])
+
+    await bot.send_message(
+        user_id,
+        f"""
+✅ <b>Выплата подтверждена</b>
+
+💰 Сумма: <b>${amount}</b>
+        """
+    )
+
+    await callback.message.edit_text("✅ Выплата подтверждена")
+
+# ================= REJECT =================
+
+reject_data = {}
+
+@dp.callback_query(F.data.startswith("reject_"))
+async def reject(callback: CallbackQuery, state: FSMContext):
+    data = callback.data.split("_")
+
+    user_id = int(data[1])
+    amount = float(data[2])
+
+    reject_data[callback.from_user.id] = (user_id, amount)
+
+    await callback.message.answer("✍️ Введите причину отказа")
+
+    await state.set_state(RejectState.reason)
+
+@dp.message(RejectState.reason)
+async def reject_reason(message: Message, state: FSMContext):
+    user_id, amount = reject_data[message.from_user.id]
+
+    cursor.execute(
+        "UPDATE users SET balance = balance + ? WHERE user_id=?",
+        (amount, user_id)
+    )
+
+    conn.commit()
+
+    await bot.send_message(
+        user_id,
+        f"""
+❌ <b>Выплата отклонена</b>
+
+📄 Причина:
+{message.text}
+
+💰 Деньги возвращены на баланс
+        """
+    )
+
+    await message.answer("✅ Отказ отправлен")
+
+    await state.clear()
+
+# ================= PROMO =================
+
+@dp.callback_query(F.data == "promo")
+async def promo(callback: CallbackQuery, state: FSMContext):
+    await callback.message.answer("🎁 Введите промокод")
+
+    await state.set_state(PromoState.code)
+
+@dp.message(PromoState.code)
+async def promo_check(message: Message, state: FSMContext):
+    code = message.text.upper()
+
+    promo = cursor.execute(
+        "SELECT * FROM promo WHERE code=?",
+        (code,)
+    ).fetchone()
+
+    if not promo:
+        return await message.answer("❌ Промокод не найден")
+
+    used = cursor.execute(
+        "SELECT * FROM promo_used WHERE user_id=? AND code=?",
+        (message.from_user.id, code)
+    ).fetchone()
+
+    if used:
+        return await message.answer("❌ Вы уже использовали этот промокод")
+
+    reward = promo[1]
+
+    cursor.execute(
+        "UPDATE users SET balance = balance + ? WHERE user_id=?",
+        (reward, message.from_user.id)
+    )
+
+    cursor.execute(
+        "INSERT INTO promo_used VALUES(?,?)",
+        (message.from_user.id, code)
+    )
+
+    conn.commit()
+
+    await message.answer(
+        f"✅ Промокод активирован\n💰 Получено: ${reward}"
+    )
+
+    await state.clear()
+
+# ================= ADMIN =================
+
+@dp.message(F.text == "/admin")
+async def admin(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    await message.answer(
+        "👑 Админ панель",
+        reply_markup=admin_kb
+    )
+
+# ================= RUN =================
+
 async def main():
-    print('👑 BOT STARTED SUCCESSFULLY')
-    await bot.delete_webhook(drop_pending_updates=True)
+    print("Bot started")
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
