@@ -30,10 +30,7 @@ bot = Bot(
 
 # 👑 PREMIUM EMOJI SAFE MODE
 # Premium emoji используются только в сообщениях
-# НЕ используются в кнопках чтобы избежать крашей
-
-bot.default.parse_mode = ParseMode.HTML)
-)
+# НЕ используются в кнопках чтобы избежать краш
 
 dp = Dispatcher(storage=MemoryStorage())
 
