@@ -127,10 +127,17 @@ def get_user(user_id):
 
 main_kb = InlineKeyboardMarkup(
     inline_keyboard=[
-        [InlineKeyboardButton(text="👤 Профиль", callback_data="profile")],
-        [InlineKeyboardButton(text="👥 Пригласить", callback_data="ref")],
-        [InlineKeyboardButton(text="💸 Вывод", callback_data="withdraw")],
-        [InlineKeyboardButton(text="🎁 Промокод", callback_data="promo")]
+        [
+            InlineKeyboardButton(text="👤 Профиль", callback_data="profile"),
+            InlineKeyboardButton(text="👥 Рефералы", callback_data="ref")
+        ],
+        [
+            InlineKeyboardButton(text="💸 Вывод", callback_data="withdraw"),
+            InlineKeyboardButton(text="🎁 Промокод", callback_data="promo")
+        ],
+        [
+            InlineKeyboardButton(text="📊 Статистика", callback_data="stats")
+        ]
     ]
 )
 
@@ -162,13 +169,17 @@ async def start(message: Message):
     )
 
     text = """
-✨ <b>Добро пожаловать!</b>
+<blockquote>💎 <b>Добро пожаловать в Premium Rewards</b></blockquote>
 
-💰 Зарабатывайте на приглашениях
+✨ <b>Зарабатывайте реальные деньги</b>
+
 👥 Приглашайте друзей
-💸 Выводите деньги
-🎁 Используйте промокоды
-    """
+💸 Получайте выплаты
+🎁 Активируйте промокоды
+📈 Увеличивайте доход
+
+💰 <b>Лучший реферальный бот</b>
+        """
 
     await message.answer(text, reply_markup=main_kb)
 
@@ -181,15 +192,15 @@ async def profile(callback: CallbackQuery):
     reward, minimum = get_settings()
 
     text = f"""
-👤 <b>Ваш профиль</b>
+<blockquote>👤 <b>Ваш профиль</b></blockquote>
 
-🆔 ID: <code>{user[0]}</code>
-💰 Баланс: <b>${user[1]:.2f}</b>
-👥 Рефералов: <b>{user[2]}</b>
+🆔 <b>ID:</b> <code>{user[0]}</code>
+💰 <b>Баланс:</b> <code>${user[1]:.2f}</code>
+👥 <b>Рефералов:</b> <code>{user[2]}</code>
 
-🎁 За реферала: <b>${reward}</b>
-💸 Минимальный вывод: <b>${minimum}</b>
-    """
+🎁 <b>За приглашение:</b> <code>${reward}</code>
+💸 <b>Мин. вывод:</b> <code>${minimum}</code>
+        """
 
     await callback.message.edit_text(text, reply_markup=main_kb)
 
@@ -200,12 +211,13 @@ async def ref(callback: CallbackQuery):
     link = f"https://t.me/{BOT_USERNAME}?start={callback.from_user.id}"
 
     text = f"""
-👥 <b>Ваша реферальная ссылка</b>
+<blockquote>👥 <b>Реферальная система</b></blockquote>
 
+🔗 <b>Ваша ссылка:</b>
 <code>{link}</code>
 
-💰 Приглашайте друзей и зарабатывайте
-    """
+💎 <b>Получайте деньги за каждого друга</b>
+        """
 
     await callback.message.edit_text(text, reply_markup=main_kb)
 
